@@ -1,0 +1,435 @@
+// Required Libraries
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+// OLED display setup
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+
+// Button pins
+#define BTN_ENTER 2
+#define BTN_UP    6
+#define BTN_DOWN  7
+#define BTN_LEFT  8
+#define BTN_RIGHT 9
+
+// Menu states
+enum MenuState {
+  SPLASH,
+  HOME,
+  STEP_DISTANCE,
+  N_STEPS,
+  INTERVAL
+};
+
+MenuState currentMenu = SPLASH;
+
+// Variables
+int stepDistance = 10; // in microns
+int nSteps = 1;
+float interval = 0.5;
+int homeIndex = 0; // 0=Step Distance, 1=N Steps, 2=Interval, 3=Start
+int stepDistanceIndex = 0; // cursor for selecting value vs Back
+
+// Function prototypes
+void drawSplash();
+void drawHome();
+void handleHomeNavigation();
+void handleStepDistance();
+void handleNSteps();
+void handleInterval();
+void runStartSequence();
+void stepMotor(int steps);
+int nStepsIndex = 0; // cursor for selecting value vs Back
+
+void setup() {
+  pinMode(BTN_ENTER, INPUT_PULLUP);
+  pinMode(BTN_UP,    INPUT_PULLUP);
+  pinMode(BTN_DOWN,  INPUT_PULLUP);
+  pinMode(BTN_LEFT,  INPUT_PULLUP);
+  pinMode(BTN_RIGHT, INPUT_PULLUP);
+
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.clearDisplay();
+  drawSplash();
+}
+
+void loop() {
+  switch (currentMenu) {
+    case SPLASH:
+      if (anyButtonPressed()) {
+        delay(200); // debounce only
+        currentMenu = HOME;
+        drawHome();
+      }
+      break;
+
+    case HOME:
+      handleHomeNavigation();
+      break;
+
+    case STEP_DISTANCE:
+      handleStepDistance();
+      break;
+
+    case N_STEPS:
+      handleNSteps();
+      break;
+
+    case INTERVAL:
+      handleInterval();
+      break;
+  }
+}
+
+bool anyButtonPressed() {
+  return digitalRead(BTN_ENTER) || digitalRead(BTN_UP) || digitalRead(BTN_DOWN) || digitalRead(BTN_LEFT) || digitalRead(BTN_RIGHT);
+}
+
+void drawSplash() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 10);
+  display.println("LW LAPSE");
+  display.println("MACRO STEPPER");
+  display.println("V1.0");
+  display.display();
+}
+
+void drawHome() {
+  display.clearDisplay();
+  display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("HOME");
+
+  const char* menuItems[] = {"Step Distance", "N Steps", "Interval", "Start"};
+  display.setTextColor(SSD1306_WHITE);
+
+  for (int i = 0; i < 4; i++) {
+    if (i == homeIndex) {
+      display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+    } else {
+      display.setTextColor(SSD1306_WHITE);
+    }
+    display.setCursor(0, 16 + i * 10);
+    display.println(menuItems[i]);
+  }
+  display.display();
+}
+
+void handleHomeNavigation() {
+  if (digitalRead(BTN_UP)) {
+    delay(200);
+    homeIndex = (homeIndex + 3) % 4;
+    drawHome();
+  }
+  if (digitalRead(BTN_DOWN)) {
+    delay(200);
+    homeIndex = (homeIndex + 1) % 4;
+    drawHome();
+  }
+  if (digitalRead(BTN_ENTER)) {
+    delay(200);
+    switch (homeIndex) {
+      case 0: currentMenu = STEP_DISTANCE; break;
+      case 1: currentMenu = N_STEPS; break;
+      case 2: currentMenu = INTERVAL; break;
+      case 3: runStartSequence(); break;
+    }
+  }
+}
+
+void handleStepDistance() {
+  const int totalOptions = 2; // step value + Back
+  stepDistanceIndex = 0;
+
+  while (true) {
+    display.clearDisplay();
+    display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("STEP DISTANCE");
+
+    for (int i = 0; i < totalOptions; i++) {
+      if (i == stepDistanceIndex) {
+        display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+      } else {
+        display.setTextColor(SSD1306_WHITE);
+      }
+
+      display.setCursor(0, 16 + i * 10);
+      if (i == 0) {
+        display.print(stepDistance);
+        display.println(" um");
+      } else {
+        display.println("Back");
+      }
+    }
+    display.display();
+
+    if (digitalRead(BTN_UP)) {
+      delay(200);
+      stepDistanceIndex = (stepDistanceIndex + totalOptions - 1) % totalOptions;
+    }
+    if (digitalRead(BTN_DOWN)) {
+      delay(200);
+      stepDistanceIndex = (stepDistanceIndex + 1) % totalOptions;
+    }
+    if (digitalRead(BTN_LEFT) && stepDistanceIndex == 0 && stepDistance > 10) {
+      delay(200);
+      stepDistance -= 10;
+    }
+    if (digitalRead(BTN_RIGHT) && stepDistanceIndex == 0) {
+      delay(200);
+      stepDistance += 10;
+    }
+    if (digitalRead(BTN_ENTER) && stepDistanceIndex == 1) {
+      delay(200);
+      currentMenu = HOME;
+      drawHome();
+      break;
+    }
+  }
+}
+
+void handleNSteps() {
+  const int totalOptions = 2; // value + Back
+  nStepsIndex = 0;
+
+  while (true) {
+    display.clearDisplay();
+    display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("N STEPS");
+
+    for (int i = 0; i < totalOptions; i++) {
+      if (i == nStepsIndex) {
+        display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+      } else {
+        display.setTextColor(SSD1306_WHITE);
+      }
+
+      display.setCursor(0, 16 + i * 10);
+      if (i == 0) {
+        display.print(nSteps);
+      } else {
+        display.println("Back");
+      }
+    }
+    display.display();
+
+    if (digitalRead(BTN_UP)) {
+      delay(200);
+      nStepsIndex = (nStepsIndex + totalOptions - 1) % totalOptions;
+    }
+    if (digitalRead(BTN_DOWN)) {
+      delay(200);
+      nStepsIndex = (nStepsIndex + 1) % totalOptions;
+    }
+    if (digitalRead(BTN_LEFT) && nStepsIndex == 0) {
+      delay(200);
+      if (nSteps > 1) {
+        if (nSteps > 120) nSteps -= 10;
+        else if (nSteps > 20) nSteps -= 5;
+        else nSteps -= 1;
+      }
+    }
+    if (digitalRead(BTN_RIGHT) && nStepsIndex == 0) {
+      delay(200);
+      if (nSteps < 200) {
+        if (nSteps >= 120) nSteps += 10;
+        else if (nSteps >= 20) nSteps += 5;
+        else nSteps += 1;
+      }
+    }
+    if (digitalRead(BTN_ENTER) && nStepsIndex == 1) {
+      delay(200);
+      currentMenu = HOME;
+      drawHome();
+      break;
+    }
+  }
+}
+
+void runStartSequence() {
+  digitalWrite(5, HIGH); // 12V Out
+  delay(500);
+
+  int totalSteps = (stepDistance / 10) * nSteps; // 10um = 1 step
+  int totalStacks = 0;
+  int totalImages = 0;
+  unsigned long lastLoopTime = millis();
+  unsigned long intervalMs = (unsigned long)(interval * 60.0 * 1000.0);
+  int stopIndex = 0;
+
+  while (true) {
+    for (int i = 0; i < nSteps; i++) {
+      digitalWrite(10, HIGH); // Trigger camera 1
+      digitalWrite(11, HIGH); // Trigger camera 2
+      delay(125);
+      digitalWrite(10, LOW);
+      digitalWrite(11, LOW);
+
+      delay(250);
+      stepMotor(stepDistance / 10); // Forward move
+      delay(250);
+    }
+
+    stepMotor(-totalSteps);
+    totalStacks++;
+    totalImages += nSteps; // Reverse move
+
+    digitalWrite(12, HIGH); // Aux out
+    delay(500);
+    digitalWrite(12, LOW);
+
+    unsigned long loopStart = millis();
+    while (millis() - loopStart < intervalMs) {
+      unsigned long remaining = intervalMs - (millis() - loopStart);
+      int secs = (remaining / 1000) % 60;
+      int mins = (remaining / 1000 / 60) % 60;
+      int hrs  = (remaining / 1000 / 60 / 60);
+
+      display.clearDisplay();
+      display.setTextSize(1);
+      display.setTextColor(SSD1306_WHITE);
+      display.setCursor(0, 0);
+      display.print("Next: ");
+      if (hrs < 10) display.print("0"); display.print(hrs); display.print(":");
+      if (mins < 10) display.print("0"); display.print(mins); display.print(":");
+      if (secs < 10) display.print("0"); display.println(secs);
+
+      float secondsTotal = (float)totalStacks / 30.0;
+      display.setCursor(0, 16);
+      display.print("Stacks: ");
+      display.print(totalStacks);
+      display.print(" (");
+      display.print(secondsTotal, 1);
+      display.println("s)");
+
+      display.setCursor(0, 28);
+      display.print("Images: ");
+      display.println(totalImages);
+
+      display.drawLine(0, 40, SCREEN_WIDTH, 40, SSD1306_WHITE);
+
+      const char* options[] = {"Stop", "Pause"};
+      for (int i = 0; i < 2; i++) {
+        display.setCursor(0, 44 + i * 10);
+        if (i == stopIndex) display.print("> ");
+        else display.print("  ");
+        display.println(options[i]);
+      }
+
+      display.display();
+
+      if (digitalRead(BTN_UP) || digitalRead(BTN_DOWN)) {
+        delay(200);
+        stopIndex = 1 - stopIndex;
+      }
+      if (digitalRead(BTN_ENTER)) {
+        delay(200);
+        if (stopIndex == 0) {
+          digitalWrite(5, LOW); // Turn off 12V
+          currentMenu = HOME;
+          drawHome();
+          return;
+        } else if (stopIndex == 1) {
+          // Pause loop until user resumes
+          // Clear options area
+          display.fillRect(0, 44, SCREEN_WIDTH, 20, SSD1306_BLACK);
+          display.setCursor(0, 54);
+          display.setTextColor(SSD1306_WHITE);
+          display.print("> Resume");
+          display.display();
+          while (true) {
+            if (digitalRead(BTN_ENTER)) {
+              delay(200);
+              break;
+            }
+          }
+        }
+          }
+        }
+      }
+    }
+}
+void stepMotor(int steps) {
+  const int stepPin = 3;
+  const int dirPin = 4;
+
+  pinMode(stepPin, OUTPUT);
+  pinMode(dirPin, OUTPUT);
+
+  digitalWrite(dirPin, steps >= 0 ? HIGH : LOW);
+  steps = abs(steps);
+
+  for (int i = 0; i < steps; i++) {
+    digitalWrite(stepPin, HIGH);
+    delayMicroseconds(500);
+    digitalWrite(stepPin, LOW);
+    delayMicroseconds(500);
+  }
+}
+
+void handleInterval() {
+  const int totalOptions = 2; // value + Back
+  int intervalIndex = 0;
+
+  while (true) {
+    display.clearDisplay();
+    display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("INTERVAL");
+
+    for (int i = 0; i < totalOptions; i++) {
+      if (i == intervalIndex) {
+        display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+      } else {
+        display.setTextColor(SSD1306_WHITE);
+      }
+
+      display.setCursor(0, 16 + i * 10);
+      if (i == 0) {
+        display.print(interval, 1);
+        display.println(" min");
+      } else {
+        display.println("Back");
+      }
+    }
+    display.display();
+
+    if (digitalRead(BTN_UP)) {
+      delay(200);
+      intervalIndex = (intervalIndex + totalOptions - 1) % totalOptions;
+    }
+    if (digitalRead(BTN_DOWN)) {
+      delay(200);
+      intervalIndex = (intervalIndex + 1) % totalOptions;
+    }
+    if (digitalRead(BTN_LEFT) && intervalIndex == 0) {
+      delay(200);
+      if (interval > 0.5) {
+        if (interval > 18) interval -= 6;
+        else if (interval > 6) interval -= 1;
+        else interval -= 0.5;
+      }
+    }
+    if (digitalRead(BTN_RIGHT) && intervalIndex == 0) {
+      delay(200);
+      if (interval < 120) {
+        if (interval >= 18) interval += 6;
+        else if (interval >= 6) interval += 1;
+        else interval += 0.5;
+      }
+    }
+    if (digitalRead(BTN_ENTER) && intervalIndex == 1) {
+      delay(200);
+      currentMenu = HOME;
+      drawHome();
+      break;
+    }
+  }
+}
