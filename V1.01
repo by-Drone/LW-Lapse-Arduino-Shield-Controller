@@ -1,0 +1,396 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// Button Pins
+#define UP_BUTTON_PIN    6
+#define DOWN_BUTTON_PIN  7
+#define ENTER_BUTTON_PIN 2
+#define LEFT_BUTTON_PIN  8
+#define RIGHT_BUTTON_PIN 9
+
+// Motor and control pins
+#define STEP_PIN 3
+#define DIR_PIN 4
+#define OUT_12V_PIN 5
+const int CAM_PINS[] = {10, 11, 12};
+
+// Button states
+bool upButtonPressed = false;
+bool downButtonPressed = false;
+bool enterButtonPressed = false;
+bool leftButtonPressed = false;
+bool rightButtonPressed = false;
+
+// Menu state
+int menuIndex = 0;
+const int menuItemCount = 3;
+
+// Timelapse settings
+float intervalMinutes = 1.0;
+int stepsPerInterval = 1;
+
+//Continuous settings
+int continuousSpeedPercent = 50;
+bool directionCW = true; // true = CW, false = CCW
+
+
+void setup() {
+  Serial.begin(9600);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println(F("SSD1306 allocation failed"));
+    while (true);
+  }
+
+  pinMode(UP_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(DOWN_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(ENTER_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(LEFT_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(RIGHT_BUTTON_PIN, INPUT_PULLUP);
+
+  pinMode(STEP_PIN, OUTPUT);
+  pinMode(DIR_PIN, OUTPUT);
+  digitalWrite(DIR_PIN, LOW); // Always CCW
+
+  pinMode(OUT_12V_PIN, OUTPUT);
+  digitalWrite(OUT_12V_PIN, LOW);
+
+  for (int i = 0; i < 3; i++) {
+    pinMode(CAM_PINS[i], OUTPUT);
+    digitalWrite(CAM_PINS[i], LOW);
+  }
+
+  showIntroScreen();
+}
+
+void loop() {
+  homeMenu();
+}
+
+void showIntroScreen() {
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setTextColor(WHITE, BLACK);
+  display.setCursor(0, 0);
+  display.println("LW LAPSE");
+  display.setCursor(0, 24);
+  display.println("TURNTABLE");
+  display.setTextSize(1);
+  display.setCursor(0, 52);
+  display.println("V1.01");
+  display.display();
+
+  while (true) {
+    readButtons();
+    if (upButtonPressed || downButtonPressed || enterButtonPressed || leftButtonPressed || rightButtonPressed) break;
+    delay(30);
+  }
+}
+
+void homeMenu() {
+  bool inHomeMenu = true;
+  while (inHomeMenu) {
+    display.clearDisplay();
+    display.setTextSize(2);
+    display.setTextColor(WHITE, BLACK);
+    display.setCursor(0, 0);
+    display.println("HOME");
+    display.setTextSize(1);
+
+    if (menuIndex == 0) display.setTextColor(BLACK, WHITE); else display.setTextColor(WHITE, BLACK);
+    display.setCursor(0, 20);
+    display.println("Timelapse");
+
+    if (menuIndex == 1) display.setTextColor(BLACK, WHITE); else display.setTextColor(WHITE, BLACK);
+    display.setCursor(0, 30);
+    display.println("Continuous");
+
+    if (menuIndex == 2) display.setTextColor(BLACK, WHITE); else display.setTextColor(WHITE, BLACK);
+    display.setCursor(0, 40);
+    display.println("Info");
+
+    display.display();
+    readButtons();
+
+    if (upButtonPressed) menuIndex--;
+    if (downButtonPressed) menuIndex++;
+    if (menuIndex < 0) menuIndex = menuItemCount - 1;
+    if (menuIndex >= menuItemCount) menuIndex = 0;
+
+    if (enterButtonPressed) {
+      if (menuIndex == 0) timelapseMenu();
+      else if (menuIndex == 1) continuousMenu();
+      else showIntroScreen();
+      inHomeMenu = false;
+    }
+
+    delay(30);
+  }
+}
+
+void timelapseMenu() {
+  bool inTimelapseMenu = true;
+  int timelapseMenuIndex = 0;
+  const int timelapseMenuItemCount = 4;
+
+  while (inTimelapseMenu) {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(WHITE, BLACK);
+    display.setCursor(0, 0);
+    display.println("TIMELAPSE");
+
+    if (timelapseMenuIndex == 0) display.setTextColor(BLACK, WHITE); else display.setTextColor(WHITE, BLACK);
+    display.setCursor(0, 12);
+    display.println("Start");
+
+    if (timelapseMenuIndex == 1) display.setTextColor(BLACK, WHITE); else display.setTextColor(WHITE, BLACK);
+    display.setCursor(0, 22);
+    display.print("Interval: ");
+    display.print(intervalMinutes, 1);
+    display.println(" min");
+
+    if (timelapseMenuIndex == 2) display.setTextColor(BLACK, WHITE); else display.setTextColor(WHITE, BLACK);
+    display.setCursor(0, 32);
+    display.print("Steps: ");
+    display.println(stepsPerInterval);
+
+    if (timelapseMenuIndex == 3) display.setTextColor(BLACK, WHITE); else display.setTextColor(WHITE, BLACK);
+    display.setCursor(0, 42);
+    display.println("Back");
+
+    // Metrics
+    float hoursPerRev = (20667.0 * intervalMinutes) / (60.0 * stepsPerInterval);
+    float videoRPM = (1800.0 * stepsPerInterval) / 20667.0;
+
+    display.setTextColor(WHITE, BLACK);
+    display.setCursor(0, 54);
+    display.print("R=");
+    display.print(hoursPerRev, 1);
+    display.print("h  V=");
+    display.print(videoRPM, 2);
+    display.println("rpm");
+
+    display.display();
+    readButtons();
+
+    if (upButtonPressed) timelapseMenuIndex--;
+    if (downButtonPressed) timelapseMenuIndex++;
+    if (timelapseMenuIndex < 0) timelapseMenuIndex = timelapseMenuItemCount - 1;
+    if (timelapseMenuIndex >= timelapseMenuItemCount) timelapseMenuIndex = 0;
+
+    if (enterButtonPressed) {
+      if (timelapseMenuIndex == 0) {
+        // Timelapse run loop
+        unsigned long intervalMillis = (unsigned long)(intervalMinutes * 60.0 * 1000.0);
+        unsigned long nextRunTime = millis();
+        unsigned long loopCounter = 0;
+
+        while (true) {
+          readButtons();
+          if (enterButtonPressed) break;
+
+          unsigned long now = millis();
+          long countdown = nextRunTime - now;
+          if (countdown < 0) countdown = 0;
+
+          display.clearDisplay();
+
+
+// Format countdown as H:MM:SS
+unsigned long secs = countdown / 1000;
+unsigned int hours = secs / 3600;
+unsigned int minutes = (secs % 3600) / 60;
+unsigned int seconds = secs % 60;
+
+display.setTextSize(2);
+display.setCursor(0, 0);
+if (hours < 10) display.print("0");
+display.print(hours);
+display.print(":");
+if (minutes < 10) display.print("0");
+display.print(minutes);
+display.print(":");
+if (seconds < 10) display.print("0");
+display.print(seconds);
+
+
+// Total count and video seconds
+display.setTextSize(1);
+display.setCursor(0, 36);
+display.print("Total: ");
+if (loopCounter < 10) display.print("000");
+else if (loopCounter < 100) display.print("00");
+else if (loopCounter < 1000) display.print("0");
+display.print(loopCounter);
+display.print("  (");
+display.print(loopCounter / 30.0, 2);
+display.println("s)");
+
+display.setCursor(0, 54);
+display.println("Press ENTER to stop");
+display.display();
+
+
+          if (now >= nextRunTime) {
+            // Trigger sequence
+            digitalWrite(OUT_12V_PIN, HIGH);
+            delay(500);
+
+            for (int i = 0; i < 3; i++) digitalWrite(CAM_PINS[i], HIGH);
+            delay(125);
+            for (int i = 0; i < 3; i++) digitalWrite(CAM_PINS[i], LOW);
+            delay(500);
+
+            for (int i = 0; i < stepsPerInterval; i++) {
+              digitalWrite(STEP_PIN, HIGH);
+              delayMicroseconds(500);
+              digitalWrite(STEP_PIN, LOW);
+              delayMicroseconds(500);
+            }
+
+            digitalWrite(OUT_12V_PIN, LOW);
+            loopCounter++;
+            nextRunTime = millis() + intervalMillis;
+          }
+
+          delay(50);
+        }
+      } else if (timelapseMenuIndex == 3) {
+        inTimelapseMenu = false;
+      }
+    }
+
+    if (timelapseMenuIndex == 1) {
+      if (leftButtonPressed) {
+        if (intervalMinutes > 0.5) {
+          if (intervalMinutes <= 6.0) intervalMinutes -= 0.5;
+          else if (intervalMinutes <= 18.0) intervalMinutes -= 1.0;
+          else intervalMinutes -= 6.0;
+        }
+        if (intervalMinutes < 0.5) intervalMinutes = 0.5;
+      }
+      if (rightButtonPressed) {
+        if (intervalMinutes < 6.0) intervalMinutes += 0.5;
+        else if (intervalMinutes < 18.0) intervalMinutes += 1.0;
+        else intervalMinutes += 6.0;
+        if (intervalMinutes > 120.0) intervalMinutes = 120.0;
+      }
+    }
+
+    if (timelapseMenuIndex == 2) {
+      if (leftButtonPressed && stepsPerInterval > 1) stepsPerInterval /= 2;
+      if (rightButtonPressed && stepsPerInterval < 4096) stepsPerInterval *= 2;
+    }
+
+    delay(30);
+  }
+}
+
+void continuousMenu() {
+  bool inContinuousMenu = true;
+  int contMenuIndex = 0;
+  const int contMenuItemCount = 4;
+
+  while (inContinuousMenu) {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(WHITE, BLACK);
+    display.setCursor(0, 0);
+    display.println("CONTINUOUS");
+
+    if (contMenuIndex == 0) display.setTextColor(BLACK, WHITE); else display.setTextColor(WHITE, BLACK);
+    display.setCursor(0, 12);
+    display.println("Start");
+
+    if (contMenuIndex == 1) display.setTextColor(BLACK, WHITE); else display.setTextColor(WHITE, BLACK);
+    display.setCursor(0, 22);
+    display.print("Speed: ");
+    display.print(continuousSpeedPercent);
+    display.println("%");
+
+    if (contMenuIndex == 2) display.setTextColor(BLACK, WHITE); else display.setTextColor(WHITE, BLACK);
+    display.setCursor(0, 32);
+    display.print("Direction: ");
+    display.println(directionCW ? "CW" : "CCW");
+
+    if (contMenuIndex == 3) display.setTextColor(BLACK, WHITE); else display.setTextColor(WHITE, BLACK);
+    display.setCursor(0, 42);
+    display.println("Back");
+
+    display.display();
+    readButtons();
+
+    if (upButtonPressed) contMenuIndex--;
+    if (downButtonPressed) contMenuIndex++;
+    if (contMenuIndex < 0) contMenuIndex = contMenuItemCount - 1;
+    if (contMenuIndex >= contMenuItemCount) contMenuIndex = 0;
+
+    if (enterButtonPressed) {
+      if (contMenuIndex == 0) {
+        // Start motor
+        display.clearDisplay();
+        display.setTextSize(1);
+        display.setCursor(0, 0);
+        display.println("Motor running...");
+        display.setCursor(0, 12);
+        display.println("Press ENTER to stop");
+        display.display();
+
+        digitalWrite(DIR_PIN, directionCW ? HIGH : LOW);
+
+        while (true) {
+          readButtons();
+          if (enterButtonPressed) break;
+
+          digitalWrite(STEP_PIN, HIGH);
+          delayMicroseconds(map(continuousSpeedPercent, 5, 100, 8000, 500)); // lower = faster
+          digitalWrite(STEP_PIN, LOW);
+          delayMicroseconds(map(continuousSpeedPercent, 5, 100, 8000, 500));
+        }
+      } else if (contMenuIndex == 3) {
+        inContinuousMenu = false;
+      }
+    }
+
+    // Handle L/R adjustments
+    if (contMenuIndex == 1) {
+      if (leftButtonPressed && continuousSpeedPercent > 5) continuousSpeedPercent -= 5;
+      if (rightButtonPressed && continuousSpeedPercent < 100) continuousSpeedPercent += 5;
+    }
+
+    if (contMenuIndex == 2) {
+      if (leftButtonPressed || rightButtonPressed) directionCW = !directionCW;
+    }
+
+    delay(30);
+  }
+}
+
+
+void readButtons() {
+  static bool lastUp = HIGH, lastDown = HIGH, lastEnter = HIGH, lastLeft = HIGH, lastRight = HIGH;
+
+  bool up = digitalRead(UP_BUTTON_PIN);
+  bool down = digitalRead(DOWN_BUTTON_PIN);
+  bool enter = digitalRead(ENTER_BUTTON_PIN);
+  bool left = digitalRead(LEFT_BUTTON_PIN);
+  bool right = digitalRead(RIGHT_BUTTON_PIN);
+
+  upButtonPressed = (lastUp == HIGH && up == LOW);
+  downButtonPressed = (lastDown == HIGH && down == LOW);
+  enterButtonPressed = (lastEnter == HIGH && enter == LOW);
+  leftButtonPressed = (lastLeft == HIGH && left == LOW);
+  rightButtonPressed = (lastRight == HIGH && right == LOW);
+
+  lastUp = up;
+  lastDown = down;
+  lastEnter = enter;
+  lastLeft = left;
+  lastRight = right;
+}
